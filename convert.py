@@ -2,6 +2,7 @@ import argparse
 import os
 import csv
 import json
+from dateutil import parser as dparse
 
 
 parser = argparse.ArgumentParser(description='Turn SFDC CSV backup into file objects')
@@ -14,6 +15,7 @@ print('Going to dump from %s to %s' % (args.source, args.dest))
 
 accounts = {}
 contacts = []
+notes = []
 
 
 def make_dir(directory):
@@ -27,7 +29,7 @@ def dict_to_json_file(data, filename):
 
 
 def name_to_dir(name):
-    return ''.join(e for e in name if e.isalnum())
+    return ''.join(e for e in name.replace(" ", "_") if e.isalnum() or e in "-_")
 
 
 def account_name_to_path(account_name):
@@ -39,30 +41,54 @@ def make_dirs():
         make_dir(account_name_to_path(name))
 
 
-def get_account_directory(account_id):
-    return os.path.join(args.dest, account_name_to_path(accounts[account_id]))
+def get_account_directory(account_id, entity_type):
+    account_path = os.path.join(args.dest, account_name_to_path(accounts[account_id]))
+    if entity_type:
+        full_path = os.path.join(account_path, entity_type)
+        make_dir(full_path)
+        return full_path
+    else:
+        return account_path
 
 
 def dump_contacts():
     for contact in contacts:
         filename = name_to_dir(contact['FirstName'] + contact['LastName']) + '.json'
-        full_path = os.path.join(get_account_directory(contact['AccountId']), filename)
+        full_path = os.path.join(get_account_directory(contact['AccountId'], 'contacts'), filename)
         dict_to_json_file(contact, full_path)
 
 
-with open(os.path.join(args.source, 'account.csv')) as f:
-    reader = csv.DictReader(f)
-    for row in reader:
-        accounts[row['Id']] = row['Name']
+def dump_notes():
+    for note in notes:
+        created = dparse.parse(note['CreatedDate'])
+        filename = name_to_dir( '%s-%s-%s-%s' % (created.year, created.month, created.day, note['Title'])) + '.json'
+        full_path = os.path.join(get_account_directory(note['AccountId'], 'notes'), filename)
+        dict_to_json_file(note, full_path)
 
-with open(os.path.join(args.source, 'contact.csv')) as f:
-    reader = csv.DictReader(f)
-    for row in reader:
-        if row['AccountId'] in accounts.keys():
-            print('%s: %s %s' % (accounts[row['AccountId']], row['FirstName'], row['LastName']))
-            contacts.append(row)
+
+def read_accounts():
+    with open(os.path.join(args.source, 'account.csv')) as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            accounts[row['Id']] = row['Name']
+    print('Read %s accounts.' % len(accounts))
+
+
+def read_entity(source, dest):
+    with open(os.path.join(args.source, source)) as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if row['AccountId'] in accounts.keys():
+                dest.append(row)
+    print('Read %s from %s.' % (len(dest), source))
+
+
+read_accounts()
+read_entity('contact.csv', contacts)
+read_entity('note.csv', notes)
 
 if args.dest:
     make_dir(args.dest)
     make_dirs()
     dump_contacts()
+    dump_notes()
